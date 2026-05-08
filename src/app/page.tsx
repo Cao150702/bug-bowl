@@ -1,36 +1,7 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-
-// 第一级：规则评分（快速、低成本）
-// 详见 /docs/ai-dialogue/02-scoring-algorithm.md
-function ruleBasedScore(title: string, body: string): {
-  score: number
-  checklist: { label: string; found: boolean; points: number }[]
-} {
-  const full = `${title} ${body}`.toLowerCase()
-  const checklist = [
-    { label: '复现步骤', test: /步骤|复现|重现|steps|reproduce/i, found: false, points: 15 },
-    { label: '环境信息', test: /环境|版本|browser|os|version/i, found: false, points: 10 },
-    { label: '错误信息', test: /日志|log|error|exception|stack/i, found: false, points: 15 },
-    { label: '截图/代码块', test: /```|截图|screenshot|image/i, found: false, points: 10 },
-    { label: '足够长度 (>100字)', test: full.length > 100, found: false, points: 10 },
-    { label: '有结构 (3+换行)', test: (body.match(/\n/g) || []).length > 3, found: false, points: 10 },
-  ]
-
-  let score = 0
-  for (const item of checklist) {
-    item.found = item.test instanceof RegExp ? item.test.test(full) : !!item.test
-    if (item.found) score += item.points
-  }
-
-  // Negative signals
-  if (full.length < 30) score -= 15
-  if (/it doesn't work|不行|不能用了|broken/.test(full)) score -= 10
-  if (/please fix|fix it|修一下/.test(full)) score -= 5
-
-  return { score: Math.max(0, Math.min(100, score)), checklist }
-}
+import { ruleBasedScore, getScoreLevel } from '@/lib/scoring'
 
 export default function Home() {
   const [title, setTitle] = useState('')
@@ -39,16 +10,20 @@ export default function Home() {
   const [aiResult, setAiResult] = useState<any>(null)
   const [loading, setLoading] = useState(false)
 
-  // Real-time rule-based scoring (debounced)
   const handleBodyChange = useCallback((value: string) => {
     setBody(value)
     if (title && value) {
-      const result = ruleBasedScore(title, value)
-      setRuleScore(result)
+      setRuleScore(ruleBasedScore(title, value))
     }
   }, [title])
 
-  // AI-powered deep analysis
+  const handleTitleChange = useCallback((value: string) => {
+    setTitle(value)
+    if (value && body) {
+      setRuleScore(ruleBasedScore(value, body))
+    }
+  }, [body])
+
   const analyzeWithAI = async () => {
     if (!title || !body) return
     setLoading(true)
@@ -59,25 +34,26 @@ export default function Home() {
         body: JSON.stringify({ title, body }),
       })
       const data = await res.json()
-      setAiResult(data)
+      if (data.ruleScore !== undefined) {
+        setRuleScore({ score: data.ruleScore, checklist: data.checklist })
+      }
+      if (data.ai) {
+        setAiResult(data.ai)
+      }
     } catch {
-      setAiResult({ error: '分析失败' })
+      setAiResult({ error: true })
     } finally {
       setLoading(false)
     }
   }
 
-  const getScoreColor = (score: number) => {
-    if (score >= 70) return '#22c55e'
-    if (score >= 40) return '#f59e0b'
-    return '#ef4444'
-  }
+  const level = ruleScore ? getScoreLevel(ruleScore.score) : null
 
   return (
     <div className="space-y-8">
       <div className="text-center space-y-2">
-        <h2 className="text-3xl font-bold">提交 Bug 报告</h2>
-        <p className="text-gray-400">实时评分，帮助你提交高质量的 Bug 报告</p>
+        <h2 className="text-3xl font-bold">Submit a Bug Report</h2>
+        <p className="text-gray-400">Real-time quality scoring helps you write better bug reports</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -86,76 +62,140 @@ export default function Home() {
           <input
             type="text"
             value={title}
-            onChange={(e) => { setTitle(e.target.value) }}
-            placeholder="Bug 标题"
+            onChange={(e) => handleTitleChange(e.target.value)}
+            placeholder="Bug title — what went wrong?"
             className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-orange-500"
           />
           <textarea
             value={body}
             onChange={(e) => handleBodyChange(e.target.value)}
-            placeholder={`描述你的 Bug...\n\n建议包含：\n1. 复现步骤\n2. 环境信息（浏览器/OS/版本）\n3. 错误信息或截图`}
-            className="w-full h-64 bg-gray-900 border border-gray-700 rounded-lg p-4 resize-none focus:outline-none focus:ring-2 focus:ring-orange-500"
+            placeholder={`Describe your bug...\n\nRecommended structure:\n1. Steps to reproduce\n2. Environment (browser, OS, version)\n3. Expected behavior\n4. Actual behavior\n5. Error logs or screenshots`}
+            className="w-full h-72 bg-gray-900 border border-gray-700 rounded-lg p-4 resize-none focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono text-sm"
           />
-          <button
-            onClick={analyzeWithAI}
-            disabled={loading || !title || !body}
-            className="px-6 py-3 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-700 rounded-lg font-medium transition-colors"
-          >
-            {loading ? 'AI 分析中...' : '🤖 AI 深度分析'}
-          </button>
+          <div className="flex gap-3">
+            <button
+              onClick={analyzeWithAI}
+              disabled={loading || !title || !body}
+              className="px-6 py-3 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-700 disabled:text-gray-400 rounded-lg font-medium transition-colors"
+            >
+              {loading ? 'Analyzing...' : 'AI Deep Analysis'}
+            </button>
+            {ruleScore && (
+              <button
+                onClick={() => { setTitle(''); setBody(''); setRuleScore(null); setAiResult(null) }}
+                className="px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm text-gray-400 transition-colors"
+              >
+                Clear
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Quality Meter */}
         <div className="space-y-6">
-          <div className="bg-gray-900 border border-gray-700 rounded-lg p-4">
-            <h3 className="font-bold mb-3">报告质量评分</h3>
+          {/* Score Card */}
+          <div className="bg-gray-900 border border-gray-700 rounded-lg p-5">
+            <h3 className="font-bold mb-4 text-sm uppercase tracking-wide text-gray-400">Report Quality</h3>
             {ruleScore ? (
               <>
-                <div className="text-4xl font-bold mb-3" style={{ color: getScoreColor(ruleScore.score) }}>
-                  {ruleScore.score}
+                <div className="flex items-end gap-2 mb-4">
+                  <span className="text-5xl font-bold tabular-nums" style={{ color: level?.color }}>
+                    {ruleScore.score}
+                  </span>
+                  <span className="text-gray-500 text-sm mb-2">/100</span>
+                </div>
+                <div className="text-xs font-medium mb-3" style={{ color: level?.color }}>
+                  {level?.label}
                 </div>
                 <div className="space-y-2">
                   {ruleScore.checklist.map((item: any, i: number) => (
                     <div key={i} className="flex items-center gap-2 text-sm">
-                      <span style={{ color: item.found ? '#22c55e' : '#6b7280' }}>
-                        {item.found ? '✓' : '✗'}
+                      <span className="w-5 text-center" style={{ color: item.found ? '#22c55e' : '#374151' }}>
+                        {item.found ? '\u2713' : '\u2717'}
                       </span>
-                      <span className={item.found ? 'text-gray-200' : 'text-gray-500'}>
-                        {item.label} (+{item.points})
+                      <span className={item.found ? 'text-gray-200' : 'text-gray-600'}>
+                        {item.label}
+                        <span className="text-gray-700 ml-1">+{item.points}</span>
                       </span>
                     </div>
                   ))}
                 </div>
-                {ruleScore.score < 40 && (
-                  <p className="mt-3 text-sm text-yellow-500">
-                    提示：补充复现步骤和环境信息可以大幅提升评分
-                  </p>
-                )}
               </>
             ) : (
-              <p className="text-gray-500 text-sm">开始输入后自动评分</p>
+              <p className="text-gray-600 text-sm">Start typing to see your score</p>
             )}
           </div>
 
-          {/* AI Result */}
+          {/* AI Analysis Result */}
           {aiResult && !aiResult.error && (
-            <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-3">
-              <h3 className="font-bold">AI 分析结果</h3>
-              <div className="text-sm space-y-2">
-                <p>类型：<span className="text-blue-400">{aiResult.type}</span></p>
-                <p>置信度：<span className="text-blue-400">{Math.round(aiResult.confidence * 100)}%</span></p>
+            <div className="bg-gray-900 border border-gray-700 rounded-lg p-5 space-y-3">
+              <h3 className="font-bold text-sm uppercase tracking-wide text-gray-400">AI Analysis</h3>
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Type</span>
+                  <span className="text-blue-400 font-medium">{aiResult.type}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Confidence</span>
+                  <span className="font-medium">{Math.round((aiResult.confidence || 0) * 100)}%</span>
+                </div>
                 {aiResult.severity && (
-                  <p>严重程度：<span style={{
-                    color: aiResult.severity === 'critical' ? '#ef4444' :
-                           aiResult.severity === 'high' ? '#f59e0b' : '#22c55e'
-                  }}>{aiResult.severity}</span></p>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Severity</span>
+                    <span className="font-medium" style={{
+                      color: aiResult.severity === 'critical' ? '#ef4444' :
+                             aiResult.severity === 'high' ? '#f59e0b' : '#22c55e'
+                    }}>
+                      {aiResult.severity}
+                    </span>
+                  </div>
                 )}
               </div>
+              {aiResult.summary && (
+                <p className="text-sm text-gray-300 mt-3">{aiResult.summary}</p>
+              )}
               {aiResult.suggestion && (
-                <p className="text-sm text-gray-400">{aiResult.suggestion}</p>
+                <div className="mt-3 p-3 bg-gray-800 rounded-lg">
+                  <p className="text-xs text-gray-500 mb-1">Suggestion</p>
+                  <p className="text-sm text-yellow-400">{aiResult.suggestion}</p>
+                </div>
               )}
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Examples Section */}
+      <div className="border-t border-gray-800 pt-8">
+        <h3 className="text-xl font-bold mb-6 text-center">Quality Examples</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Bad Example */}
+          <div className="bg-gray-900 border border-red-900/30 rounded-lg p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="w-2 h-2 rounded-full bg-red-500"></span>
+              <span className="text-red-400 font-bold text-sm">Low Quality (Score: 15)</span>
+            </div>
+            <div className="text-sm text-gray-400 space-y-2">
+              <p className="font-mono text-gray-300">Title: &quot;it doesn't work&quot;</p>
+              <p className="font-mono text-gray-300">Body: &quot;please fix it&quot;</p>
+            </div>
+            <p className="mt-3 text-xs text-gray-500">Missing: reproduction steps, environment info, error details</p>
+          </div>
+
+          {/* Good Example */}
+          <div className="bg-gray-900 border border-green-900/30 rounded-lg p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="w-2 h-2 rounded-full bg-green-500"></span>
+              <span className="text-green-400 font-bold text-sm">High Quality (Score: 85)</span>
+            </div>
+            <div className="text-sm text-gray-400 space-y-2">
+              <p className="font-mono text-gray-300">Title: &quot;Login fails with special chars in password&quot;</p>
+              <p className="font-mono text-gray-300 text-xs line-clamp-4">
+                Steps: 1. Go to /login 2. Enter email + password with # 3. Click submit...
+              </p>
+            </div>
+            <p className="mt-3 text-xs text-gray-500">Has: steps, environment, expected/actual behavior</p>
+          </div>
         </div>
       </div>
     </div>
