@@ -1,49 +1,85 @@
 'use client'
 
-import { useState, useCallback } from 'react'
-import { ruleBasedScore, getScoreLevel } from '@/lib/scoring'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import { ruleBasedScore, getScoreLevel, type RuleScoreResult } from '@/lib/scoring'
 
 export default function Home() {
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
-  const [ruleScore, setRuleScore] = useState<{ score: number; checklist: any[] } | null>(null)
+  const [ruleScore, setRuleScore] = useState<RuleScoreResult | null>(null)
   const [aiResult, setAiResult] = useState<any>(null)
   const [loading, setLoading] = useState(false)
 
+  const inputVersion = useRef(0)
+  const activeRequest = useRef<{ version: number; controller: AbortController } | null>(null)
+
+  const invalidateAnalysis = useCallback(() => {
+    // Retiring the request before aborting also protects against transports that
+    // ignore cancellation, or a response whose JSON is still being parsed.
+    inputVersion.current += 1
+    const request = activeRequest.current
+    activeRequest.current = null
+    request?.controller.abort()
+  }, [])
+
+  useEffect(() => () => invalidateAnalysis(), [invalidateAnalysis])
+
+  const resetAnalysis = useCallback(() => {
+    invalidateAnalysis()
+    setAiResult(null)
+    setLoading(false)
+  }, [invalidateAnalysis])
+
   const handleBodyChange = useCallback((value: string) => {
+    resetAnalysis()
     setBody(value)
-    if (title && value) {
-      setRuleScore(ruleBasedScore(title, value))
-    }
-  }, [title])
+    setRuleScore(title && value ? ruleBasedScore(title, value) : null)
+  }, [title, resetAnalysis])
 
   const handleTitleChange = useCallback((value: string) => {
+    resetAnalysis()
     setTitle(value)
-    if (value && body) {
-      setRuleScore(ruleBasedScore(value, body))
-    }
-  }, [body])
+    setRuleScore(value && body ? ruleBasedScore(value, body) : null)
+  }, [body, resetAnalysis])
+
+  const clearReport = () => {
+    resetAnalysis()
+    setTitle('')
+    setBody('')
+    setRuleScore(null)
+  }
 
   const analyzeWithAI = async () => {
-    if (!title || !body) return
+    // The ref closes the gap before React renders the disabled button.
+    if (!title || !body || activeRequest.current) return
+    const request = { version: inputVersion.current, controller: new AbortController() }
+    activeRequest.current = request
+    const isCurrent = () => activeRequest.current === request && inputVersion.current === request.version
+
+    setAiResult(null)
     setLoading(true)
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, body }),
+        signal: request.controller.signal,
       })
+      if (!res.ok) throw new Error('Analysis failed')
       const data = await res.json()
+      if (!isCurrent()) return
       if (data.ruleScore !== undefined) {
         setRuleScore({ score: data.ruleScore, checklist: data.checklist })
       }
-      if (data.ai) {
-        setAiResult(data.ai)
-      }
+      setAiResult(data.ai || null)
     } catch {
-      setAiResult({ error: true })
+      if (isCurrent()) setAiResult({ error: true })
     } finally {
-      setLoading(false)
+      // A stale request must never stop a newer request's loading indicator.
+      if (isCurrent()) {
+        activeRequest.current = null
+        setLoading(false)
+      }
     }
   }
 
@@ -80,9 +116,9 @@ export default function Home() {
             >
               {loading ? 'Analyzing...' : 'AI Deep Analysis'}
             </button>
-            {ruleScore && (
+            {(title || body) && (
               <button
-                onClick={() => { setTitle(''); setBody(''); setRuleScore(null); setAiResult(null) }}
+                onClick={clearReport}
                 className="px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm text-gray-400 transition-colors"
               >
                 Clear
@@ -108,7 +144,7 @@ export default function Home() {
                   {level?.label}
                 </div>
                 <div className="space-y-2">
-                  {ruleScore.checklist.map((item: any, i: number) => (
+                  {ruleScore.checklist.map((item, i) => (
                     <div key={i} className="flex items-center gap-2 text-sm">
                       <span className="w-5 text-center" style={{ color: item.found ? '#22c55e' : '#374151' }}>
                         {item.found ? '\u2713' : '\u2717'}
@@ -127,6 +163,9 @@ export default function Home() {
           </div>
 
           {/* AI Analysis Result */}
+          {aiResult?.error && (
+            <p role="alert" className="text-sm text-red-400">Analysis failed. Please try again.</p>
+          )}
           {aiResult && !aiResult.error && (
             <div className="bg-gray-900 border border-gray-700 rounded-lg p-5 space-y-3">
               <h3 className="font-bold text-sm uppercase tracking-wide text-gray-400">AI Analysis</h3>

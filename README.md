@@ -84,6 +84,28 @@ npm run dev
 
 ---
 
+## 回归检查
+
+建议使用 Node.js 20 或更新版本。安装依赖后运行：
+
+```bash
+npm ci
+npm test
+npm run typecheck
+```
+
+`npm test` 使用 Node.js 测试运行器和 React 18 test renderer 挂载真实首页组件，
+所有 `fetch` 均由测试替身接管，不需要 API key，也不会调用真实 AI。
+覆盖编辑或清空输入、改回原文、重复点击、响应乱序、延迟解析 JSON、错误重试和组件卸载。
+请求同时绑定输入版本和请求身份，因此即使底层忽略 AbortSignal，旧结果也不会覆盖当前报告。
+取消浏览器请求不代表服务器上已经开始的 AI 工作一定停止。
+
+`npm run build` 会加载现有分析 API 模块，需要设置 `OPENAI_API_KEY`。
+仅构建时可使用不具备访问权限的占位值；不要在该配置下调用真实分析接口。
+当前仓库尚未配置 ESLint，`npm run lint` 会提示初始化，不属于上述自动化检查。
+
+---
+
 ## 项目结构
 
 ```
